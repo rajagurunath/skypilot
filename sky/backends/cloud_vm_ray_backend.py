@@ -233,6 +233,7 @@ def _get_cluster_config_template(cloud):
         clouds.Azure: 'azure-ray.yml.j2',
         clouds.Cudo: 'cudo-ray.yml.j2',
         clouds.GCP: 'gcp-ray.yml.j2',
+        clouds.IONet: 'ionet-ray.yml.j2',
         clouds.Lambda: 'lambda-ray.yml.j2',
         clouds.IBM: 'ibm-ray.yml.j2',
         clouds.SCP: 'scp-ray.yml.j2',
@@ -1186,6 +1187,26 @@ class FailoverCloudErrorHandlerV2:
             _add_to_blocked_resources(
                 blocked_resources, resources_lib.Resources(cloud=clouds.SCP()))
         else:
+            FailoverCloudErrorHandlerV2._default_handler(
+                blocked_resources, launchable_resources, region, zones, error)
+
+    @staticmethod
+    def _ionet_handler(blocked_resources: Set['resources_lib.Resources'],
+                       launchable_resources: 'resources_lib.Resources',
+                       region: 'clouds.Region',
+                       zones: Optional[List['clouds.Zone']],
+                       error: Exception) -> None:
+        logger.info(f'IONet handler error: {error}')
+        # Block IONet if the credential has expired or API is unavailable
+        if isinstance(error, exceptions.InvalidCloudCredentials):
+            _add_to_blocked_resources(
+                blocked_resources, resources_lib.Resources(cloud=clouds.IONet()))
+        elif 'IONet API' in str(error) or 'api_key' in str(error).lower():
+            # Block IONet for API-related errors
+            _add_to_blocked_resources(
+                blocked_resources, resources_lib.Resources(cloud=clouds.IONet()))
+        else:
+            # For other errors, use default handler (blocks region/zone)
             FailoverCloudErrorHandlerV2._default_handler(
                 blocked_resources, launchable_resources, region, zones, error)
 

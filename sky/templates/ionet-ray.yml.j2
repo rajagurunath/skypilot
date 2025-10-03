@@ -1,0 +1,128 @@
+# IONet configuration for Ray clusters
+cluster_name: {{cluster_name}}
+
+max_workers: {{num_nodes - 1}}
+
+upscaling_speed: 1.0
+idle_timeout_minutes: 5
+
+provider:
+    type: external
+    module: sky.provision.ionet.instance
+    use_internal_ips: true
+
+auth:
+    ssh_user: root
+    ssh_private_key: {{ssh_private_key}}
+
+available_node_types:
+    ray.head.default:
+        resources: {}
+        node_config: 
+            InstanceType: {{instance_type}}
+            hardware_id: {{hardware_id}}
+            gpus_per_vm: {{gpus_per_vm}}
+            duration_hours: 24
+            vm_image_type: general
+            # SSH keys and GitHub IDs can be configured here
+            ssh_keys: {}
+            github_ids: []
+            # Network services for Ray ports
+            network_services:
+                ray-dashboard:
+                    port: 8265
+                    protocol: tcp
+                    whitelist: ["0.0.0.0/0"]
+                ray-client:
+                    port: 10001
+                    protocol: tcp  
+                    whitelist: ["0.0.0.0/0"]
+        min_workers: 0
+        max_workers: 0
+        
+    ray.worker.default:
+        resources: {}
+        node_config:
+            InstanceType: {{instance_type}}
+            hardware_id: {{hardware_id}}
+            gpus_per_vm: {{gpus_per_vm}}
+            duration_hours: 24
+            vm_image_type: general
+            ssh_keys: {}
+            github_ids: []
+        min_workers: 0
+        max_workers: {{num_nodes - 1}}
+
+head_node_type: ray.head.default
+
+# Files or directories to copy to the head and worker nodes
+file_mounts: {
+{%- for dst, src in credentials.items() %}
+  {{dst}}: {{src}}
+{%- endfor %}
+}
+
+# List of shell commands to run to set up nodes
+head_setup_commands:
+    # Disable unattended upgrades
+    - sudo systemctl stop unattended-upgrades || true
+    - sudo systemctl disable unattended-upgrades || true
+    - sudo sed -i 's/Unattended-Upgrade "1"/Unattended-Upgrade "0"/g' /etc/apt/apt.conf.d/20auto-upgrades || true
+    
+    # Update package lists
+    - sudo apt-get update
+    
+    # Install basic dependencies
+    - sudo apt-get install -y python3-pip python3-dev
+    
+    # Install Ray if not already present
+    - pip3 install ray[default]==2.9.3 || pip3 install --user ray[default]==2.9.3
+    
+    # Set up GPU support if available
+{% if custom_resources %}
+    - sudo apt-get install -y nvidia-docker2 || true
+{% endif %}
+
+    # Install SkyPilot dependencies
+    - pip3 install skypilot-nightly[all] || pip3 install --user skypilot-nightly[all]
+
+worker_setup_commands:
+    # Same setup as head node
+    - sudo systemctl stop unattended-upgrades || true
+    - sudo systemctl disable unattended-upgrades || true
+    - sudo sed -i 's/Unattended-Upgrade "1"/Unattended-Upgrade "0"/g' /etc/apt/apt.conf.d/20auto-upgrades || true
+    - sudo apt-get update
+    - sudo apt-get install -y python3-pip python3-dev
+    - pip3 install ray[default]==2.9.3 || pip3 install --user ray[default]==2.9.3
+{% if custom_resources %}
+    - sudo apt-get install -y nvidia-docker2 || true
+{% endif %}
+    - pip3 install skypilot-nightly[all] || pip3 install --user skypilot-nightly[all]
+
+# Custom commands that will be run on the head node after common setup.
+head_start_ray_commands:
+    - ray stop
+    - >-
+      ulimit -n 65536;
+      ray start
+      --head
+      --port=6379
+      --object-manager-port=8076
+      --autoscaling-config=~/ray_bootstrap_config.yaml
+      --dashboard-host=0.0.0.0
+      --dashboard-port=8265
+      {% if custom_resources -%}
+      --resources='{{custom_resources}}'
+      {%- endif %}
+
+# Custom commands that will be run on worker nodes after common setup.
+worker_start_ray_commands:
+    - ray stop
+    - >-
+      ulimit -n 65536;
+      ray start
+      --address=$RAY_HEAD_IP:6379
+      --object-manager-port=8076
+      {% if custom_resources -%}
+      --resources='{{custom_resources}}'
+      {%- endif %}

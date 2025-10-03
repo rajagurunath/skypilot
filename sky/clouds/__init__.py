@@ -21,6 +21,7 @@ from sky.clouds.fluidstack import Fluidstack
 from sky.clouds.gcp import GCP
 from sky.clouds.hyperbolic import Hyperbolic
 from sky.clouds.ibm import IBM
+from sky.clouds.ionet import IONet
 from sky.clouds.kubernetes import Kubernetes
 from sky.clouds.lambda_cloud import Lambda
 from sky.clouds.nebius import Nebius
@@ -42,6 +43,7 @@ __all__ = [
     'Cudo',
     'DummyCloud',
     'GCP',
+    'IONet',
     'Lambda',
     'DO',
     'Paperspace',
