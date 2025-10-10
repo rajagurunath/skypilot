@@ -22,8 +22,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             // 1. choose your default reviewers any way you like:
-            const defaultReviewers = ['carlos-ionet', 'silkspace',
-                                      'vnlitvinov', 'webcoderz'];
+            const defaultReviewers = ['silkspace', 'vnlitvinov', 'ilkhom19', 'rajagurunath-io'];
 
             // 2. pull-request author
             const prAuthor = context.payload.pull_request.user.login;
