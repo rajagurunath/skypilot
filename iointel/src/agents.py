@@ -21,6 +21,8 @@ from .ui.rich_panels import render_agent_result_panel
 
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.profiles import ModelProfile
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai import Agent as PydanticAgent, Tool as PydanticTool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.messages import ModelMessage
@@ -112,6 +114,17 @@ class PatchedValidatorTool(PydanticTool):
         return await super().run(message, *args, **kw)
 
 
+class OssAwareOpenAIProvider(OpenAIProvider):
+    def model_profile(self, model_name: str) -> ModelProfile | None:
+        result: OpenAIModelProfile = super().model_profile(model_name)
+        if result and "gpt-oss" in model_name:
+            # upstream pydantic isn't aware of gpt-oss models, so thinks it's
+            # openai-hosted reasoning model that doesn't support some settings;
+            # rectify its assumptions here
+            result.openai_unsupported_model_settings = []
+        return result
+
+
 class Agent(BaseModel):
     """
     A configurable agent that allows you to plug in different chat models,
@@ -201,7 +214,7 @@ class Agent(BaseModel):
         else:
             kwargs = dict(
                 model_kwargs,
-                provider=OpenAIProvider(
+                provider=OssAwareOpenAIProvider(
                     base_url=resolved_base_url,
                     api_key=resolved_api_key.get_secret_value(),
                 ),

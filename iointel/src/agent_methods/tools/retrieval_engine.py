@@ -61,6 +61,7 @@ class RetrievalEngine(BaseModel):
             timeout=timeout,
         )
 
+    # TODO: add support for streaming mode, use it in RAG search endpoint
     async def _request(
         self, method: str, endpoint: str, timeout: float | None = None, **kw
     ) -> dict | bytes | None:
@@ -149,7 +150,7 @@ class RetrievalEngine(BaseModel):
         response_dict = await self._request("DELETE", f"documents/{str(id)}")
         return response_dict["results"]["success"]
 
-    @register_tool("retrieval-engine-list_documents")
+    @register_tool("retrieval-engine-list-documents")
     async def list_documents(
         self,
         ids: list[str | uuid.UUID] | None = None,
@@ -189,7 +190,6 @@ class RetrievalEngine(BaseModel):
     async def rag_search(
         self,
         query: str,
-        include_title_if_available: bool = False,
         include_web_search: bool = False,
         timeout: float = 300.0,
     ) -> RAGResponse:
@@ -198,7 +198,6 @@ class RetrievalEngine(BaseModel):
 
         Args:
             query (str): The search query.
-            include_title_if_available (Optional[bool]): Include document titles in responses when available.
             include_web_search (Optional[bool]): Include web search results provided to the LLM.
             timeout (Optional[float]): Override default timeout when performing the search.
 
@@ -207,7 +206,6 @@ class RetrievalEngine(BaseModel):
         """
         payload = {
             "query": query,
-            "include_title_if_available": include_title_if_available,
             "include_web_search": include_web_search,
         }
         response_dict = await self._request(
