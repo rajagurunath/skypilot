@@ -2,7 +2,6 @@ import dataclasses
 import json
 import uuid
 
-from pydantic_graph import End
 
 from .memory import AsyncMemory
 from .agent_methods.data_models.datamodels import (
@@ -28,7 +27,6 @@ from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai import Agent as PydanticAgent, Tool as PydanticTool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai import CallToolsNode
 
 from pydantic import ConfigDict, SecretStr, BaseModel, ValidationError
 from pydantic_ai.messages import (
@@ -482,7 +480,7 @@ class Agent(BaseModel):
             # instead of doing `async for node in agent_run` unroll the graph manually;
             # it allows mutating or replacing nodes if we need to
             node = agent_run.next_node
-            while not isinstance(node, End):
+            while not self._runner.is_end_node(node):
                 if self._runner.is_model_request_node(node):
                     async with node.stream(agent_run.ctx) as request_stream:
                         async for event in request_stream:
@@ -492,7 +490,7 @@ class Agent(BaseModel):
                                 delta = event.delta.content_delta or ""
                                 content += delta
                                 yield delta  # Yield individual delta, not accumulated content
-                if isinstance(node, CallToolsNode):
+                if self._runner.is_call_tools_node(node):
                     texts = "".join(
                         part.content
                         for part in node.model_response.parts
