@@ -1,10 +1,11 @@
 """Test multimodal support for iointel agents."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 import httpx
 from iointel import Agent, ImageUrl, BinaryContent, DocumentUrl
 from pydantic_ai.models.openai import OpenAIModel
+from pydantic_graph import End
 
 
 @pytest.fixture
@@ -19,16 +20,15 @@ def mock_agent():
         api_key="test-key",
     )
 
+    class StubIter:
+        async def __aenter__(self, *a, **kw):
+            return MagicMock(next_node=End(data=None))
+
+        async def __aexit__(self, *a, **kw):
+            pass
+
     # Mock the underlying runner
-    agent._runner.run = AsyncMock(
-        return_value=MagicMock(
-            output="Test response",
-            all_messages=lambda: [],
-            new_messages=lambda: [],
-            usage={},
-            result=MagicMock(tool_usage_results=[], output="Test response"),
-        )
-    )
+    agent._runner.iter = MagicMock(return_value=StubIter())
 
     return agent
 
@@ -44,8 +44,8 @@ async def test_agent_accepts_image_url(mock_agent):
     await mock_agent.run(image_content)
 
     # Verify the run was called with the multimodal content
-    mock_agent._runner.run.assert_called_once()
-    call_args = mock_agent._runner.run.call_args[0]
+    mock_agent._runner.iter.assert_called_once()
+    call_args = mock_agent._runner.iter.call_args[0]
     assert call_args[0] == image_content
 
 
@@ -61,8 +61,8 @@ async def test_agent_accepts_binary_content(mock_agent):
     await mock_agent.run(multimodal_content)
 
     # Verify the run was called with the multimodal content
-    mock_agent._runner.run.assert_called_once()
-    call_args = mock_agent._runner.run.call_args[0]
+    mock_agent._runner.iter.assert_called_once()
+    call_args = mock_agent._runner.iter.call_args[0]
     assert call_args[0] == multimodal_content
 
 
@@ -72,8 +72,8 @@ async def test_agent_backward_compatibility_string(mock_agent):
     await mock_agent.run("Simple text query")
 
     # Verify the run was called with the string
-    mock_agent._runner.run.assert_called_once()
-    call_args = mock_agent._runner.run.call_args[0]
+    mock_agent._runner.iter.assert_called_once()
+    call_args = mock_agent._runner.iter.call_args[0]
     assert call_args[0] == "Simple text query"
 
 
@@ -90,8 +90,8 @@ async def test_agent_mixed_multimodal_content(mock_agent):
     await mock_agent.run(mixed_content)
 
     # Verify the run was called with the mixed content
-    mock_agent._runner.run.assert_called_once()
-    call_args = mock_agent._runner.run.call_args[0]
+    mock_agent._runner.iter.assert_called_once()
+    call_args = mock_agent._runner.iter.call_args[0]
     assert call_args[0] == mixed_content
 
 
@@ -148,7 +148,7 @@ async def test_agent_with_malformed_multimodal():
     )
 
     # Mock the underlying runner to simulate a runtime error
-    agent._runner.run = AsyncMock(
+    agent._runner.iter = MagicMock(
         side_effect=RuntimeError("Failed to process multimodal content")
     )
 
@@ -179,7 +179,7 @@ async def test_unreachable_image_url():
         )
 
         # Mock the runner to simulate the error propagating
-        agent._runner.run = AsyncMock(
+        agent._runner.iter = MagicMock(
             side_effect=httpx.HTTPStatusError(
                 "404 Not Found",
                 request=MagicMock(),
@@ -207,7 +207,7 @@ async def test_unsupported_media_type():
     )
 
     # Mock the runner to simulate unsupported media type error
-    agent._runner.run = AsyncMock(
+    agent._runner.iter = MagicMock(
         side_effect=ValueError("Unsupported media type: application/x-unsupported")
     )
 
@@ -237,7 +237,7 @@ async def test_network_timeout():
         mock_get.side_effect = httpx.TimeoutException("Request timed out")
 
         # Mock the runner to simulate the timeout propagating
-        agent._runner.run = AsyncMock(
+        agent._runner.iter = MagicMock(
             side_effect=httpx.TimeoutException("Request timed out")
         )
 

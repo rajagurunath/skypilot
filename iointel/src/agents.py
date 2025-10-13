@@ -2,6 +2,7 @@ import dataclasses
 import json
 import uuid
 
+
 from .memory import AsyncMemory
 from .agent_methods.data_models.datamodels import (
     PersonaConfig,
@@ -25,7 +26,6 @@ from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai import Agent as PydanticAgent, Tool as PydanticTool
 from pydantic_ai.agent import AgentRunResult
-from pydantic_ai.messages import ModelMessage
 from pydantic_ai.settings import ModelSettings
 
 from pydantic import ConfigDict, SecretStr, BaseModel, ValidationError
@@ -34,6 +34,8 @@ from pydantic_ai.messages import (
     TextPartDelta,
     ToolCallPart,
     UserContent,
+    ModelMessage,
+    TextPart,
 )
 from typing import Callable, Dict, Any, Optional, Union, Literal, Sequence
 
@@ -123,6 +125,13 @@ class OssAwareOpenAIProvider(OpenAIProvider):
             # rectify its assumptions here
             result.openai_unsupported_model_settings = []
         return result
+
+
+class JsonToolCall(BaseModel):
+    name: str
+    arguments: dict
+
+    model_config = ConfigDict(extra="allow")
 
 
 class Agent(BaseModel):
@@ -420,6 +429,7 @@ class Agent(BaseModel):
         self,
         query: str | Sequence[UserContent],
         conversation_id: Optional[str] = None,
+        return_markdown: bool = False,
         pretty: bool = None,
         message_history_limit=100,
         **kwargs,
@@ -428,32 +438,19 @@ class Agent(BaseModel):
         Run the agent asynchronously.
         :param query: The query to run the agent on. Can be a string or sequence of multimodal content.
         :param conversation_id: The conversation ID to use for the agent.
+        :param return_markdown: Whether to return the result as markdown.
         :param pretty: Whether to pretty print the result as a rich panel, useful for cli or notebook.
         :param message_history_limit: The number of messages to load from the memory.
         :param kwargs: Additional keyword arguments to pass to the agent.
         :return: The result of the agent run.
         """
-
-        message_history = await self._load_message_history(
-            conversation_id, message_history_limit
-        )
-        if message_history:
-            kwargs["message_history"] = message_history
-
-        self._adjust_output_type(kwargs)
-
-        result = await self._runner.run(query, **kwargs)
-
-        conversation_id = self._resolve_conversation_id(conversation_id)
-
-        if self.memory:
-            try:
-                await self.memory.store_run_history(conversation_id, result)
-            except Exception as e:
-                print("Error storing run history:", e)
-
-        return self._postprocess_agent_result(
-            result, query, conversation_id, pretty=pretty
+        return await self.run_stream(
+            query,
+            conversation_id,
+            return_markdown,
+            message_history_limit,
+            pretty,
+            **kwargs,
         )
 
     async def _stream_tokens(
@@ -467,15 +464,23 @@ class Agent(BaseModel):
         Async generator that yields partial content as tokens are streamed from the model.
         At the end, yields a dict with '__final__', 'content', and 'agent_result'.
         """
+        self._adjust_output_type(kwargs)
+
         message_history = await self._load_message_history(
             conversation_id, message_history_limit
         )
         if message_history:
             kwargs["message_history"] = message_history
+        known_tool_args = {
+            tool.name: set(tool.parameters["properties"].keys()) for tool in self.tools
+        }
 
         async with self._runner.iter(query, **kwargs) as agent_run:
             content = ""
-            async for node in agent_run:
+            # instead of doing `async for node in agent_run` unroll the graph manually;
+            # it allows mutating or replacing nodes if we need to
+            node = agent_run.next_node
+            while not self._runner.is_end_node(node):
                 if self._runner.is_model_request_node(node):
                     async with node.stream(agent_run.ctx) as request_stream:
                         async for event in request_stream:
@@ -485,6 +490,29 @@ class Agent(BaseModel):
                                 delta = event.delta.content_delta or ""
                                 content += delta
                                 yield delta  # Yield individual delta, not accumulated content
+                if self._runner.is_call_tools_node(node):
+                    texts = "".join(
+                        part.content
+                        for part in node.model_response.parts
+                        if isinstance(part, TextPart)
+                    )
+                    try:
+                        call = JsonToolCall.model_validate_json(texts)
+                    except ValidationError:
+                        pass
+                    else:
+                        if known_args := known_tool_args.get(call.name):
+                            if not (set(call.arguments.keys()) - known_args):
+                                # this seems to be a problem that LLM produced a JSON tool call
+                                # as output instead of proper tool call - we found a tool that
+                                # has matching arguments, so replace TextPart with ToolCallPart
+                                node.model_response.parts = [
+                                    ToolCallPart(
+                                        tool_name=call.name, args=call.arguments
+                                    )
+                                ]
+
+                node = await agent_run.next(node)
             # After streaming, yield a special marker with the final result
             yield {
                 "__final__": True,
