@@ -2,6 +2,8 @@ import dataclasses
 import json
 import uuid
 
+from pydantic_graph import End
+
 from .memory import AsyncMemory
 from .agent_methods.data_models.datamodels import (
     PersonaConfig,
@@ -25,8 +27,8 @@ from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai import Agent as PydanticAgent, Tool as PydanticTool
 from pydantic_ai.agent import AgentRunResult
-from pydantic_ai.messages import ModelMessage
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai import CallToolsNode
 
 from pydantic import ConfigDict, SecretStr, BaseModel, ValidationError
 from pydantic_ai.messages import (
@@ -34,6 +36,8 @@ from pydantic_ai.messages import (
     TextPartDelta,
     ToolCallPart,
     UserContent,
+    ModelMessage,
+    TextPart,
 )
 from typing import Callable, Dict, Any, Optional, Union, Literal, Sequence
 
@@ -123,6 +127,13 @@ class OssAwareOpenAIProvider(OpenAIProvider):
             # rectify its assumptions here
             result.openai_unsupported_model_settings = []
         return result
+
+
+class JsonToolCall(BaseModel):
+    name: str
+    arguments: dict
+
+    model_config = ConfigDict(extra="allow")
 
 
 class Agent(BaseModel):
@@ -472,10 +483,16 @@ class Agent(BaseModel):
         )
         if message_history:
             kwargs["message_history"] = message_history
+        known_tool_args = {
+            tool.name: set(tool.parameters["properties"].keys()) for tool in self.tools
+        }
 
         async with self._runner.iter(query, **kwargs) as agent_run:
             content = ""
-            async for node in agent_run:
+            # instead of doing `async for node in agent_run` unroll the graph manually;
+            # it allows mutating or replacing nodes if we need to
+            node = agent_run.next_node
+            while not isinstance(node, End):
                 if self._runner.is_model_request_node(node):
                     async with node.stream(agent_run.ctx) as request_stream:
                         async for event in request_stream:
@@ -485,6 +502,29 @@ class Agent(BaseModel):
                                 delta = event.delta.content_delta or ""
                                 content += delta
                                 yield delta  # Yield individual delta, not accumulated content
+                if isinstance(node, CallToolsNode):
+                    texts = "".join(
+                        part.content
+                        for part in node.model_response.parts
+                        if isinstance(part, TextPart)
+                    )
+                    try:
+                        call = JsonToolCall.model_validate_json(texts)
+                    except ValidationError:
+                        pass
+                    else:
+                        if known_args := known_tool_args.get(call.name):
+                            if not (set(call.arguments.keys()) - known_args):
+                                # this seems to be a problem that LLM produced a JSON tool call
+                                # as output instead of proper tool call - we found a tool that
+                                # has matching arguments, so replace TextPart with ToolCallPart
+                                node.model_response.parts = [
+                                    ToolCallPart(
+                                        tool_name=call.name, args=call.arguments
+                                    )
+                                ]
+
+                node = await agent_run.next(node)
             # After streaming, yield a special marker with the final result
             yield {
                 "__final__": True,
