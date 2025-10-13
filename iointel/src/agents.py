@@ -431,6 +431,7 @@ class Agent(BaseModel):
         self,
         query: str | Sequence[UserContent],
         conversation_id: Optional[str] = None,
+        return_markdown: bool = False,
         pretty: bool = None,
         message_history_limit=100,
         **kwargs,
@@ -439,32 +440,19 @@ class Agent(BaseModel):
         Run the agent asynchronously.
         :param query: The query to run the agent on. Can be a string or sequence of multimodal content.
         :param conversation_id: The conversation ID to use for the agent.
+        :param return_markdown: Whether to return the result as markdown.
         :param pretty: Whether to pretty print the result as a rich panel, useful for cli or notebook.
         :param message_history_limit: The number of messages to load from the memory.
         :param kwargs: Additional keyword arguments to pass to the agent.
         :return: The result of the agent run.
         """
-
-        message_history = await self._load_message_history(
-            conversation_id, message_history_limit
-        )
-        if message_history:
-            kwargs["message_history"] = message_history
-
-        self._adjust_output_type(kwargs)
-
-        result = await self._runner.run(query, **kwargs)
-
-        conversation_id = self._resolve_conversation_id(conversation_id)
-
-        if self.memory:
-            try:
-                await self.memory.store_run_history(conversation_id, result)
-            except Exception as e:
-                print("Error storing run history:", e)
-
-        return self._postprocess_agent_result(
-            result, query, conversation_id, pretty=pretty
+        return await self.run_stream(
+            query,
+            conversation_id,
+            return_markdown,
+            message_history_limit,
+            pretty,
+            **kwargs,
         )
 
     async def _stream_tokens(
@@ -478,6 +466,8 @@ class Agent(BaseModel):
         Async generator that yields partial content as tokens are streamed from the model.
         At the end, yields a dict with '__final__', 'content', and 'agent_result'.
         """
+        self._adjust_output_type(kwargs)
+
         message_history = await self._load_message_history(
             conversation_id, message_history_limit
         )
