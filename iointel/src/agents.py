@@ -121,9 +121,12 @@ class OssAwareOpenAIProvider(OpenAIProvider):
         result: OpenAIModelProfile = super().model_profile(model_name)
         if result and "gpt-oss" in model_name:
             # upstream pydantic isn't aware of gpt-oss models, so thinks it's
-            # openai-hosted reasoning model that doesn't support some settings;
-            # rectify its assumptions here
-            result.openai_unsupported_model_settings = []
+            # openai-hosted reasoning model that doesn't support any settings;
+            # rectify its assumptions here, disable only penalties as they currently crash VLLM
+            result.openai_unsupported_model_settings = [
+                "frequency_penalty",
+                "presence_penalty",
+            ]
         return result
 
 
