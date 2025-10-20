@@ -1620,8 +1620,10 @@ def get_clusters(
                 cluster_table.c.storage_mounts_metadata,
                 cluster_table.c.cluster_ever_up,
                 cluster_table.c.status_updated_at, cluster_table.c.user_hash,
-                cluster_table.c.config_hash, cluster_table.c.workspace,
-                cluster_table.c.is_managed)
+                cluster_table.c.config_hash,
+                cluster_table.c.workspace, cluster_table.c.is_managed,
+                user_table.c.name.label('user_name')).outerjoin(
+                    user_table, cluster_table.c.user_hash == user_table.c.id)
         else:
             query = session.query(
                 cluster_table.c.name,
@@ -1643,7 +1645,9 @@ def get_clusters(
                 cluster_table.c.is_managed,
                 # extra fields compared to above query
                 cluster_table.c.last_creation_yaml,
-                cluster_table.c.last_creation_command)
+                cluster_table.c.last_creation_command,
+                user_table.c.name.label('user_name')).outerjoin(
+                    user_table, cluster_table.c.user_hash == user_table.c.id)
         if exclude_managed_clusters:
             query = query.filter(cluster_table.c.is_managed == int(False))
         if workspaces_filter is not None:
@@ -1666,28 +1670,22 @@ def get_clusters(
         rows = query.all()
     records = []
 
-    # get user hash for each row
-    row_to_user_hash = {}
-    for row in rows:
-        user_hash = (row.user_hash
-                     if row.user_hash is not None else current_user_hash)
-        row_to_user_hash[row.cluster_hash] = user_hash
-
-    # get all users needed for the rows at once
-    user_hashes = set(row_to_user_hash.values())
-    user_hash_to_user = get_users(user_hashes)
+    # Check if we need to fetch the current user's name,
+    # for backwards compatibility, if user_hash is None.
+    current_user_name = None
+    needs_current_user = any(row.user_hash is None for row in rows)
+    if needs_current_user:
+        current_user = get_user(current_user_hash)
+        current_user_name = (current_user.name
+                             if current_user is not None else None)
 
     # get last cluster event for each row
-    cluster_hashes = set(row_to_user_hash.keys())
     if not summary_response:
+        cluster_hashes = {row.cluster_hash for row in rows}
         last_cluster_event_dict = _get_last_cluster_event_multiple(
             cluster_hashes, ClusterEventType.STATUS_CHANGE)
 
-    # get user for each row
     for row in rows:
-        user_hash = row_to_user_hash[row.cluster_hash]
-        user = user_hash_to_user.get(user_hash, None)
-        user_name = user.name if user is not None else None
         # TODO: use namedtuple instead of dict
         record = {
             'name': row.name,
@@ -1704,8 +1702,10 @@ def get_clusters(
                 row.storage_mounts_metadata),
             'cluster_ever_up': bool(row.cluster_ever_up),
             'status_updated_at': row.status_updated_at,
-            'user_hash': user_hash,
-            'user_name': user_name,
+            'user_hash': (row.user_hash
+                          if row.user_hash is not None else current_user_hash),
+            'user_name': (row.user_name
+                          if row.user_name is not None else current_user_name),
             'workspace': row.workspace,
             'is_managed': bool(row.is_managed),
             'config_hash': row.config_hash,
@@ -2495,11 +2495,22 @@ def _set_cluster_yaml_from_file(cluster_yaml_path: str,
     # on the local file system and migrate it to the database.
     # TODO(syang): remove this check once we have a way to migrate the
     # cluster from file to database. Remove on v0.12.0.
-    if cluster_yaml_path is not None and os.path.exists(cluster_yaml_path):
-        with open(cluster_yaml_path, 'r', encoding='utf-8') as f:
-            yaml_str = f.read()
-        set_cluster_yaml(cluster_name, yaml_str)
-        return yaml_str
+    if cluster_yaml_path is not None:
+        # First try the exact path
+        path_to_read = None
+        if os.path.exists(cluster_yaml_path):
+            path_to_read = cluster_yaml_path
+        # Fallback: try with .debug suffix (when debug logging was enabled)
+        # Debug logging causes YAML files to be saved with .debug suffix
+        # but the path stored in the handle doesn't include it
+        debug_path = cluster_yaml_path + '.debug'
+        if os.path.exists(debug_path):
+            path_to_read = debug_path
+        if path_to_read is not None:
+            with open(path_to_read, 'r', encoding='utf-8') as f:
+                yaml_str = f.read()
+            set_cluster_yaml(cluster_name, yaml_str)
+            return yaml_str
     return None
 
 
