@@ -28,7 +28,7 @@ from pydantic_ai import Agent as PydanticAgent, Tool as PydanticTool
 from pydantic_ai.agent import AgentRunResult
 from pydantic_ai.settings import ModelSettings
 
-from pydantic import ConfigDict, SecretStr, BaseModel, ValidationError
+from pydantic import ConfigDict, Field, SecretStr, BaseModel, ValidationError
 from pydantic_ai.messages import (
     PartDeltaEvent,
     TextPartDelta,
@@ -134,7 +134,23 @@ class JsonToolCall(BaseModel):
     name: str
     arguments: dict
 
+
+class JsonToolCallBase(BaseModel):
+    name: str | None = None
+    function: str | None = None
+    arguments: dict
+
     model_config = ConfigDict(extra="allow")
+
+    def get_first_call(self) -> JsonToolCall:
+        return JsonToolCall(name=(self.name or self.function), arguments=self.arguments)
+
+
+class JsonToolCallsSection(BaseModel):
+    tool_calls: list[JsonToolCallBase] = Field(min_length=1)
+
+    def get_first_call(self) -> "JsonToolCall":
+        return self.tool_calls[0].get_first_call()
 
 
 class Agent(BaseModel):
@@ -499,11 +515,13 @@ class Agent(BaseModel):
                         for part in node.model_response.parts
                         if isinstance(part, TextPart)
                     )
-                    try:
-                        call = JsonToolCall.model_validate_json(texts)
-                    except ValidationError:
-                        pass
-                    else:
+                    for call_model in (JsonToolCallBase, JsonToolCallsSection):
+                        try:
+                            call = call_model.model_validate_json(
+                                texts
+                            ).get_first_call()
+                        except ValidationError:
+                            continue
                         if known_args := known_tool_args.get(call.name):
                             if not (set(call.arguments.keys()) - known_args):
                                 # this seems to be a problem that LLM produced a JSON tool call
@@ -514,6 +532,7 @@ class Agent(BaseModel):
                                         tool_name=call.name, args=call.arguments
                                     )
                                 ]
+                                break
 
                 node = await agent_run.next(node)
             # After streaming, yield a special marker with the final result
