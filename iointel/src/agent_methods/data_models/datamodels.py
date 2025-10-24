@@ -83,6 +83,13 @@ class AgentResult(BaseModel):
     tool_usage_results: List[ToolUsageResult]
 
 
+class RunStreamMeta(TypedDict, total=False):
+    __final__: bool = False
+    __tool_retry__: bool = False
+    content: str = ""
+    agent_result: AgentResult | None = None
+
+
 ###### persona ########
 class PersonaConfig(BaseModel):
     """
