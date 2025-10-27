@@ -10,6 +10,7 @@ from .agent_methods.data_models.datamodels import (
     ToolUsageResult,
     AgentResult,
     OutputType,
+    RunStreamMeta,
 )
 from .agent_methods.agents.tool_factory import (
     resolve_single_tool,
@@ -481,7 +482,9 @@ class Agent(BaseModel):
     ):
         """
         Async generator that yields partial content as tokens are streamed from the model.
-        At the end, yields a dict with '__final__', 'content', and 'agent_result'.
+        At the end, yields RunStreamMeta() with '__final__', 'content', and 'agent_result'.
+
+        If a misplaced tool call was detected, yields RunStreamMeta() with '__tool_retry__'=True.
         """
         self._adjust_output_type(kwargs)
 
@@ -500,6 +503,7 @@ class Agent(BaseModel):
             # it allows mutating or replacing nodes if we need to
             node = agent_run.next_node
             while not self._runner.is_end_node(node):
+                old_content = content  # save before streaming in case we'd replace streamed text later
                 if self._runner.is_model_request_node(node):
                     async with node.stream(agent_run.ctx) as request_stream:
                         async for event in request_stream:
@@ -532,15 +536,17 @@ class Agent(BaseModel):
                                         tool_name=call.name, args=call.arguments
                                     )
                                 ]
+                                yield RunStreamMeta(__tool_retry__=True)
+                                content = old_content  # remove streamed bits that were misplaced by LLM
                                 break
 
                 node = await agent_run.next(node)
             # After streaming, yield a special marker with the final result
-            yield {
-                "__final__": True,
-                "content": content,  # Still provide full content in final dict
-                "agent_result": agent_run.result,
-            }
+            yield RunStreamMeta(
+                __final__=True,
+                content=content,  # Still provide full content in final dict
+                agent_result=agent_run.result,
+            )
 
     def run_stream(
         self,
@@ -582,8 +588,7 @@ class Agent(BaseModel):
                     markdown_content = partial["content"]
                     agent_result = partial["agent_result"]
                     break
-                else:
-                    yield partial  # Stream tokens as they arrive
+                yield partial  # Stream tokens or some metadata as they arrive
 
             # Handle memory and postprocessing at the end
             if self.memory:

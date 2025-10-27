@@ -204,7 +204,7 @@ class IOGradioUI:
                 accumulated_content = partial["content"]
                 agent_result = partial["agent_result"]
                 break
-            else:
+            elif isinstance(partial, str):
                 # Accumulate individual deltas for progressive display
                 accumulated_content += partial
                 assistant_msg["content"] = (
