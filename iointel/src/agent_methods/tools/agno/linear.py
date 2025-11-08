@@ -1,19 +1,40 @@
+from os import getenv
+
 from typing import Optional
 from agno.tools.linear import LinearTools as AgnoLinearTools
 from .common import make_base, wrap_tool
 
 
 class Linear(make_base(AgnoLinearTools)):
+    api_token: str | None = None
+
     def _get_tool(self):
-        return self.Inner(
-            get_user_details=True,
-            get_issue_details=True,
-            create_issue=True,
-            update_issue=True,
-            get_user_assigned_issues=True,
-            get_workflow_issues=True,
-            get_high_priority_issues=True,
-        )
+        # a workaround for Linear tool not accepting the api token as argument,
+        # only as environment variable; they have fixed that in agno>=2.0.0,
+        # but update requires non-zero effort
+        if self.api_token is not None:
+
+            def my_getenv(key, *a, **kw):
+                if key == "LINEAR_API_KEY":
+                    return self.api_token
+                return getenv(key, *a, **kw)
+
+            # monkey-patch the function accessed by LinearTools() init so that
+            # it gets the api key correctly
+            self.Inner.__init__.__globals__["getenv"] = my_getenv
+        try:
+            return self.Inner(
+                get_user_details=True,
+                get_issue_details=True,
+                create_issue=True,
+                update_issue=True,
+                get_user_assigned_issues=True,
+                get_workflow_issues=True,
+                get_high_priority_issues=True,
+            )
+        finally:
+            # return original function back
+            self.Inner.__init__.__globals__["getenv"] = getenv
 
     @wrap_tool("agno__linear__get_user_details", AgnoLinearTools.get_user_details)
     def get_user_details(self) -> Optional[str]:
