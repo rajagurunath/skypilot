@@ -37,7 +37,7 @@ class ClickUp(make_base(AgnoClickUpTools)):
     def create_task(
         self, space_name: str, task_name: str, task_description: str
     ) -> str:
-        return self._tool.create_task(space_name, task_name)
+        return self._tool.create_task(space_name, task_name, task_description)
 
     @wrap_tool("agno__clickup__list_spaces", AgnoClickUpTools.list_spaces)
     def list_spaces(self) -> str:
